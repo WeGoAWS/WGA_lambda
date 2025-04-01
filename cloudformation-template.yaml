@@ -31,6 +31,11 @@ Parameters:
     Type: String
     Default: wga-outputbucket
     Description: S3 bucket name for storing analysis results
+    
+  DeploymentBucketName:
+    Type: String
+    Default: wga-lambda-deployment
+    Description: S3 bucket name for storing lambda deployment packages
 
 Resources:
   # DynamoDB tables
@@ -119,6 +124,7 @@ Resources:
               # Permissions for Cognito access
               - Effect: Allow
                 Action:
+                  - cognito-idp:*
                   - cognito-identity:GetId
                   - cognito-identity:GetCredentialsForIdentity
                 Resource: '*'
@@ -132,6 +138,8 @@ Resources:
                 Resource:
                   - !Sub 'arn:aws:s3:::${OutputBucketName}'
                   - !Sub 'arn:aws:s3:::${OutputBucketName}/*'
+                  - !Sub 'arn:aws:s3:::${DeploymentBucketName}'
+                  - !Sub 'arn:aws:s3:::${DeploymentBucketName}/*'
               
               # Permissions for CloudTrail access
               - Effect: Allow
@@ -148,6 +156,16 @@ Resources:
                   - iam:PutUserPolicy
                   - iam:DeleteUserPolicy
                   - iam:ListUserPolicies
+                  - iam:ListUsers
+                  - iam:GetUser
+                Resource: '*'
+              
+              # Permissions for SSM
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
                 Resource: '*'
 
   # Lambda functions
@@ -169,8 +187,9 @@ Resources:
           COGNITO_CLIENT_ID: !Ref CognitoClientId
           COGNITO_DOMAIN: !Ref CognitoDomain
           COGNITO_IDENTITY_POOL_ID: !Ref CognitoIdentityPoolId
+          OUTPUT_BUCKET: !Ref OutputBucketName
       Code:
-        S3Bucket: lambda-deployment-packages
+        S3Bucket: !Ref DeploymentBucketName
         S3Key: wga-auth.zip
 
   CloudTrailLambdaFunction:
@@ -186,11 +205,14 @@ Resources:
         Variables:
           ENV: !Ref EnvironmentName
           SESSIONS_TABLE: !Ref SessionsTable
+          USERS_TABLE: !Ref UsersTable
+          USER_POOL_ID: !Ref UserPoolId
+          COGNITO_CLIENT_ID: !Ref CognitoClientId
           COGNITO_DOMAIN: !Ref CognitoDomain
           COGNITO_IDENTITY_POOL_ID: !Ref CognitoIdentityPoolId
           OUTPUT_BUCKET: !Ref OutputBucketName
       Code:
-        S3Bucket: lambda-deployment-packages
+        S3Bucket: !Ref DeploymentBucketName
         S3Key: wga-cloudtrail.zip
 
   PolicyRecommendationLambdaFunction:
@@ -206,12 +228,15 @@ Resources:
         Variables:
           ENV: !Ref EnvironmentName
           SESSIONS_TABLE: !Ref SessionsTable
+          USERS_TABLE: !Ref UsersTable
           ANALYSIS_RESULTS_TABLE: !Ref AnalysisResultsTable
+          USER_POOL_ID: !Ref UserPoolId
+          COGNITO_CLIENT_ID: !Ref CognitoClientId
           COGNITO_DOMAIN: !Ref CognitoDomain
           COGNITO_IDENTITY_POOL_ID: !Ref CognitoIdentityPoolId
           OUTPUT_BUCKET: !Ref OutputBucketName
       Code:
-        S3Bucket: lambda-deployment-packages
+        S3Bucket: !Ref DeploymentBucketName
         S3Key: wga-policy-recommendation.zip
 
   # API Gateway

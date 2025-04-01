@@ -24,8 +24,21 @@ echo -e "${GREEN}WGA Lambda 함수 배포 스크립트 - 환경: ${ENV}, 리전:
 if ! aws s3 ls "s3://${S3_BUCKET}" --region ${REGION} 2>&1 > /dev/null; then
     echo -e "${YELLOW}S3 버킷 ${S3_BUCKET}이 존재하지 않습니다. 생성합니다...${NC}"
     aws s3 mb "s3://${S3_BUCKET}" --region ${REGION}
+    # 버킷 버전 관리 활성화
+    aws s3api put-bucket-versioning --bucket ${S3_BUCKET} --versioning-configuration Status=Enabled --region ${REGION}
 else
     echo -e "${GREEN}S3 버킷 ${S3_BUCKET}이 이미 존재합니다.${NC}"
+fi
+
+# 출력용 S3 버킷 확인 및 생성
+OUTPUT_BUCKET="wga-outputbucket"
+if ! aws s3 ls "s3://${OUTPUT_BUCKET}" --region ${REGION} 2>&1 > /dev/null; then
+    echo -e "${YELLOW}S3 버킷 ${OUTPUT_BUCKET}이 존재하지 않습니다. 생성합니다...${NC}"
+    aws s3 mb "s3://${OUTPUT_BUCKET}" --region ${REGION}
+    # 버킷 버전 관리 활성화
+    aws s3api put-bucket-versioning --bucket ${OUTPUT_BUCKET} --versioning-configuration Status=Enabled --region ${REGION}
+else
+    echo -e "${GREEN}S3 버킷 ${OUTPUT_BUCKET}이 이미 존재합니다.${NC}"
 fi
 
 # 임시 디렉토리 생성
@@ -38,7 +51,7 @@ echo -e "${GREEN}공통 모듈 복사...${NC}"
 cp -r common/* ${TEMP_DIR}/common/
 
 # 함수별 배포 패키지 생성 및 업로드
-for func in auth cloudtrail policy_recommendation; do
+for func in auth cloudtrail policy-recommendation; do
     echo -e "${YELLOW}함수 ${func} 배포 패키지 생성 중...${NC}"
     
     # 함수별 디렉토리 생성
@@ -48,8 +61,15 @@ for func in auth cloudtrail policy_recommendation; do
     # 함수 코드 복사
     cp -r ${func}/* ${FUNC_DIR}/
     
+    # CloudTrail 함수의 파일명 오류 수정
+    if [ "$func" = "cloudtrail" ] && [ -f "${FUNC_DIR}/lambda_funciton.py" ]; then
+        echo -e "${RED}CloudTrail 함수의 파일명 오류 발견. 수정합니다...${NC}"
+        mv "${FUNC_DIR}/lambda_funciton.py" "${FUNC_DIR}/lambda_function.py"
+    fi
+    
     # 공통 모듈 복사
-    cp -r ${TEMP_DIR}/common ${FUNC_DIR}/
+    mkdir -p ${FUNC_DIR}/common
+    cp -r ${TEMP_DIR}/common/* ${FUNC_DIR}/common/
     
     # 현재 디렉토리로 이동
     cd ${FUNC_DIR}
@@ -65,7 +85,7 @@ for func in auth cloudtrail policy_recommendation; do
     zip -q -r ${TEMP_DIR}/wga-${func}.zip .
     
     # 원래 디렉토리로 돌아가기
-    cd -
+    cd - > /dev/null
     
     # S3에 업로드
     echo -e "${GREEN}S3에 업로드 중...${NC}"
@@ -86,9 +106,23 @@ if [ -f "parameters-${ENV}.json" ]; then
     PARAMS_FILE="parameters-${ENV}.json"
     echo -e "${GREEN}파라미터 파일 사용: ${PARAMS_FILE}${NC}"
     
+    # 파라미터 파일에 DeploymentBucketName 추가
+    # jq가 설치되어 있지 않을 경우 수동으로 파라미터 추가
+    if [ -x "$(command -v jq)" ]; then
+        # jq를 사용하여 DeploymentBucketName 파라미터 추가
+        TMP_PARAMS=$(mktemp)
+        jq --arg bucket "$S3_BUCKET" '
+            . += [{"ParameterKey": "DeploymentBucketName", "ParameterValue": $bucket}]
+        ' ${PARAMS_FILE} > ${TMP_PARAMS}
+        PARAMS_FILE=${TMP_PARAMS}
+    else
+        echo -e "${YELLOW}jq가 설치되어 있지 않습니다. DeploymentBucketName 파라미터를 수동으로 추가해주세요.${NC}"
+    fi
+    
     # 템플릿 유효성 검사
+    echo -e "${GREEN}CloudFormation 템플릿 유효성 검사 중...${NC}"
     aws cloudformation validate-template \
-        --template-url https://${S3_BUCKET}.s3.amazonaws.com/cloudformation-template.yaml \
+        --template-url https://${S3_BUCKET}.s3.${REGION}.amazonaws.com/cloudformation-template.yaml \
         --region ${REGION}
         
     # 스택이 존재하는지 확인
@@ -97,7 +131,7 @@ if [ -f "parameters-${ENV}.json" ]; then
         echo -e "${GREEN}기존 스택 업데이트 중...${NC}"
         aws cloudformation update-stack \
             --stack-name wga-lambda-${ENV} \
-            --template-url https://${S3_BUCKET}.s3.amazonaws.com/cloudformation-template.yaml \
+            --template-url https://${S3_BUCKET}.s3.${REGION}.amazonaws.com/cloudformation-template.yaml \
             --parameters file://${PARAMS_FILE} \
             --capabilities CAPABILITY_NAMED_IAM \
             --region ${REGION}
@@ -106,7 +140,7 @@ if [ -f "parameters-${ENV}.json" ]; then
         echo -e "${GREEN}새 스택 생성 중...${NC}"
         aws cloudformation create-stack \
             --stack-name wga-lambda-${ENV} \
-            --template-url https://${S3_BUCKET}.s3.amazonaws.com/cloudformation-template.yaml \
+            --template-url https://${S3_BUCKET}.s3.${REGION}.amazonaws.com/cloudformation-template.yaml \
             --parameters file://${PARAMS_FILE} \
             --capabilities CAPABILITY_NAMED_IAM \
             --region ${REGION}
@@ -125,6 +159,12 @@ elif aws cloudformation wait stack-update-complete --stack-name wga-lambda-${ENV
     echo -e "${GREEN}스택 업데이트 완료!${NC}"
 else
     echo -e "${RED}스택 작업 실패 또는 다른 상태입니다. 수동으로 확인해 주세요.${NC}"
+    echo -e "${YELLOW}CloudFormation 이벤트 로그를 확인합니다:${NC}"
+    aws cloudformation describe-stack-events \
+        --stack-name wga-lambda-${ENV} \
+        --region ${REGION} \
+        --query "StackEvents[?contains(ResourceStatus, 'FAILED')].{Resource:LogicalResourceId, Status:ResourceStatus, Reason:ResourceStatusReason}" \
+        --output table
 fi
 
 # 배포 완료 후 API 엔드포인트 정보 출력
@@ -136,5 +176,4 @@ if [ "$API_ENDPOINT" = "None" ] || [ -z "$API_ENDPOINT" ]; then
     echo -e "aws cloudformation describe-stacks --stack-name wga-lambda-${ENV} --region ${REGION} --query \"Stacks[0].Outputs\" --output json"
 else
     echo -e "${GREEN}배포 완료!${NC}"
-    echo -e "${GREEN}API 엔드포인트: ${API_ENDPOINT}${NC}"
-fi
+    echo -e "${GREEN}API 엔드포

@@ -95,6 +95,7 @@ wga-lambda/
        "ParameterValue": "wga-outputbucket"
      }
    ]
+   이후, S3버킷을 미리 생성해야 작동!!
    ```
 
 2. **배포 스크립트 실행**
