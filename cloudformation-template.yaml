@@ -1,11 +1,11 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'WGA(Wise Global Audit) 애플리케이션의 AWS Lambda 배포를 위한 CloudFormation 템플릿'
+Description: 'CloudFormation template for deploying the WGA (Wise Global Audit) application to AWS Lambda'
 
 Parameters:
   EnvironmentName:
     Type: String
     Default: dev
-    Description: 배포 환경 (dev, test, prod)
+    Description: Deployment environment (dev, test, prod)
     AllowedValues:
       - dev
       - test
@@ -13,27 +13,27 @@ Parameters:
   
   CognitoDomain:
     Type: String
-    Description: Cognito 사용자 풀 도메인 URL
+    Description: Cognito user pool domain URL
   
   UserPoolId:
     Type: String
-    Description: Cognito 사용자 풀 ID
+    Description: Cognito user pool ID
   
   CognitoClientId:
     Type: String
-    Description: Cognito 클라이언트 ID
+    Description: Cognito client ID
   
   CognitoIdentityPoolId:
     Type: String
-    Description: Cognito 자격 증명 풀 ID
+    Description: Cognito identity pool ID
   
   OutputBucketName:
     Type: String
     Default: wga-outputbucket
-    Description: 분석 결과를 저장할 S3 버킷 이름
+    Description: S3 bucket name for storing analysis results
 
 Resources:
-  # DynamoDB 테이블
+  # DynamoDB tables
   SessionsTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -80,12 +80,9 @@ Resources:
               KeyType: HASH
           Projection:
             ProjectionType: ALL
-          ProvisionedThroughput:
-            ReadCapacityUnits: 5
-            WriteCapacityUnits: 5
       BillingMode: PAY_PER_REQUEST
 
-  # Lambda 실행 역할
+  # Lambda execution role
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -104,7 +101,7 @@ Resources:
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              # DynamoDB 접근 권한
+              # Permissions for DynamoDB access
               - Effect: Allow
                 Action:
                   - dynamodb:PutItem
@@ -119,14 +116,14 @@ Resources:
                   - !GetAtt AnalysisResultsTable.Arn
                   - !Sub "${AnalysisResultsTable.Arn}/index/UserArnIndex"
               
-              # Cognito 접근 권한
+              # Permissions for Cognito access
               - Effect: Allow
                 Action:
                   - cognito-identity:GetId
                   - cognito-identity:GetCredentialsForIdentity
                 Resource: '*'
               
-              # S3 버킷 접근 권한
+              # Permissions for S3 bucket access
               - Effect: Allow
                 Action:
                   - s3:GetObject
@@ -136,7 +133,7 @@ Resources:
                   - !Sub 'arn:aws:s3:::${OutputBucketName}'
                   - !Sub 'arn:aws:s3:::${OutputBucketName}/*'
               
-              # CloudTrail 접근 권한
+              # Permissions for CloudTrail access
               - Effect: Allow
                 Action:
                   - cloudtrail:LookupEvents
@@ -144,7 +141,7 @@ Resources:
                   - cloudtrail:GetTrailStatus
                 Resource: '*'
               
-              # IAM 정책 관리 권한
+              # Permissions for IAM policy management
               - Effect: Allow
                 Action:
                   - iam:GetUserPolicy
@@ -153,7 +150,7 @@ Resources:
                   - iam:ListUserPolicies
                 Resource: '*'
 
-  # Lambda 함수
+  # Lambda functions
   AuthLambdaFunction:
     Type: AWS::Lambda::Function
     Properties:
@@ -227,7 +224,7 @@ Resources:
         Types:
           - REGIONAL
 
-  # API Gateway - Auth 리소스 및 메서드
+  # API Gateway - Auth resources and methods
   AuthResource:
     Type: AWS::ApiGateway::Resource
     Properties:
@@ -285,7 +282,7 @@ Resources:
         IntegrationHttpMethod: POST
         Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AuthLambdaFunction.Arn}/invocations'
 
-  # API Gateway - CloudTrail 리소스 및 메서드
+  # API Gateway - CloudTrail resources and methods
   CloudTrailResource:
     Type: AWS::ApiGateway::Resource
     Properties:
@@ -306,7 +303,7 @@ Resources:
       RestApiId: !Ref WgaApi
       ResourceId: !Ref CloudTrailLogsResource
       HttpMethod: GET
-      AuthorizationType: NONE  # 실제 배포에서는 COGNITO 또는 JWT 인증 사용 권장
+      AuthorizationType: NONE  # In production, use COGNITO or JWT authentication
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
@@ -325,13 +322,13 @@ Resources:
       RestApiId: !Ref WgaApi
       ResourceId: !Ref CloudTrailAnalyzeLogsResource
       HttpMethod: GET
-      AuthorizationType: NONE  # 실제 배포에서는 COGNITO 또는 JWT 인증 사용 권장
+      AuthorizationType: NONE  # In production, use COGNITO or JWT authentication
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
         Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CloudTrailLambdaFunction.Arn}/invocations'
 
-  # API Gateway - PolicyRecommendation 리소스 및 메서드
+  # API Gateway - PolicyRecommendation resources and methods
   PolicyRecommendationResource:
     Type: AWS::ApiGateway::Resource
     Properties:
@@ -352,7 +349,7 @@ Resources:
       RestApiId: !Ref WgaApi
       ResourceId: !Ref ProcessMultipleAnalysesResource
       HttpMethod: GET
-      AuthorizationType: NONE  # 실제 배포에서는 COGNITO 또는 JWT 인증 사용 권장
+      AuthorizationType: NONE  # In production, use COGNITO or JWT authentication
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
@@ -371,13 +368,13 @@ Resources:
       RestApiId: !Ref WgaApi
       ResourceId: !Ref ApplyPolicyChangesResource
       HttpMethod: POST
-      AuthorizationType: NONE  # 실제 배포에서는 COGNITO 또는 JWT 인증 사용 권장
+      AuthorizationType: NONE  # In production, use COGNITO or JWT authentication
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
         Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PolicyRecommendationLambdaFunction.Arn}/invocations'
 
-  # API Gateway 배포
+  # API Gateway deployment
   ApiDeployment:
     Type: AWS::ApiGateway::Deployment
     DependsOn:
@@ -392,7 +389,7 @@ Resources:
       RestApiId: !Ref WgaApi
       StageName: !Ref EnvironmentName
 
-  # Lambda 함수에 API Gateway 호출 권한 부여
+  # Grant API Gateway permission to invoke Lambda functions
   AuthLambdaPermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -419,17 +416,17 @@ Resources:
 
 Outputs:
   ApiEndpoint:
-    Description: WGA API 엔드포인트 URL
+    Description: WGA API endpoint URL
     Value: !Sub 'https://${WgaApi}.execute-api.${AWS::Region}.amazonaws.com/${EnvironmentName}'
 
   AuthEndpoint:
-    Description: 인증 엔드포인트 URL
+    Description: Authentication endpoint URL
     Value: !Sub 'https://${WgaApi}.execute-api.${AWS::Region}.amazonaws.com/${EnvironmentName}/auth'
 
   CloudTrailEndpoint:
-    Description: CloudTrail 엔드포인트 URL
+    Description: CloudTrail endpoint URL
     Value: !Sub 'https://${WgaApi}.execute-api.${AWS::Region}.amazonaws.com/${EnvironmentName}/cloudtrail'
 
   PolicyRecommendationEndpoint:
-    Description: 정책 추천 엔드포인트 URL
+    Description: Policy recommendation endpoint URL
     Value: !Sub 'https://${WgaApi}.execute-api.${AWS::Region}.amazonaws.com/${EnvironmentName}/policy-recommendation'
