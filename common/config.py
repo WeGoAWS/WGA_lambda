@@ -1,0 +1,91 @@
+# lambda_functions/common/config.py
+import os
+import json
+import boto3
+from botocore.exceptions import ClientError
+
+# 환경 변수에서 설정 불러오기
+AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
+ENV = os.environ.get('ENV', 'dev')
+
+# DynamoDB 테이블
+SESSIONS_TABLE = os.environ.get('SESSIONS_TABLE', f'Sessions-{ENV}')
+USERS_TABLE = os.environ.get('USERS_TABLE', f'Users-{ENV}')
+ANALYSIS_RESULTS_TABLE = os.environ.get('ANALYSIS_RESULTS_TABLE', f'AnalysisResults-{ENV}')
+
+# S3 버킷
+OUTPUT_BUCKET = os.environ.get('OUTPUT_BUCKET', 'wga-outputbucket')
+
+# AWS Cognito 설정
+USER_POOL_ID = os.environ.get('USER_POOL_ID', '')
+COGNITO_CLIENT_ID = os.environ.get('COGNITO_CLIENT_ID', '')
+COGNITO_DOMAIN = os.environ.get('COGNITO_DOMAIN', '')
+COGNITO_IDENTITY_POOL_ID = os.environ.get('COGNITO_IDENTITY_POOL_ID', '')
+
+# AWS SSM에서 비밀 설정 가져오기
+def get_ssm_parameter(param_name, with_decryption=True):
+    """
+    AWS SSM Parameter Store에서 파라미터 값을 가져옵니다.
+    """
+    ssm = boto3.client('ssm', region_name=AWS_REGION)
+    try:
+        response = ssm.get_parameter(Name=param_name, WithDecryption=with_decryption)
+        return response['Parameter']['Value']
+    except ClientError as e:
+        print(f"Error getting parameter {param_name}: {e}")
+        return None
+
+# 설정 값을 한 번에 불러오는 함수
+def load_config():
+    """
+    애플리케이션에 필요한 모든 설정 값을 로드합니다.
+    """
+    config = {
+        'aws_region': AWS_REGION,
+        'env': ENV,
+        'tables': {
+            'sessions': SESSIONS_TABLE,
+            'users': USERS_TABLE,
+            'analysis_results': ANALYSIS_RESULTS_TABLE
+        },
+        's3': {
+            'output_bucket': OUTPUT_BUCKET
+        },
+        'cognito': {
+            'user_pool_id': USER_POOL_ID,
+            'client_id': COGNITO_CLIENT_ID,
+            'domain': COGNITO_DOMAIN,
+            'identity_pool_id': COGNITO_IDENTITY_POOL_ID
+        }
+    }
+    
+    # 개발 환경이 아니라면 SSM에서 추가 비밀 설정 로드
+    if ENV != 'dev':
+        try:
+            # SSM 파라미터 경로
+            ssm_path = f'/wga/{ENV}/'
+            
+            # SSM에서 모든 파라미터 로드
+            ssm = boto3.client('ssm', region_name=AWS_REGION)
+            response = ssm.get_parameters_by_path(
+                Path=ssm_path,
+                WithDecryption=True,
+                Recursive=True
+            )
+            
+            # 설정에 추가
+            for param in response.get('Parameters', []):
+                name = param['Name'].replace(ssm_path, '')
+                value = param['Value']
+                
+                # 파라미터 이름에 따라 적절한 위치에 추가
+                if name.startswith('cognito_'):
+                    config['cognito'][name.replace('cognito_', '')] = value
+            
+        except Exception as e:
+            print(f"Error loading SSM parameters: {e}")
+    
+    return config
+
+# 구성 로드
+CONFIG = load_config()

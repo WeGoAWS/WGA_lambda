@@ -1,0 +1,4 @@
+boto3==1.26.0
+python-jose==3.3.0
+cryptography==38.0.4
+pyjwt==2.6.0
