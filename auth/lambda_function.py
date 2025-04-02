@@ -5,7 +5,7 @@ import time
 from common.db import create_session, delete_session, create_or_update_user
 from common.config import CONFIG
 from common.utils import extract_session_id_from_cookies, format_api_response, handle_api_exception
-from auth_service import verify_cognito_token, create_user_session, logout_user
+from auth_service import verify_cognito_token, create_user_session, logout_user, validate_and_create_session
 
 def lambda_handler(event, context):
     """
