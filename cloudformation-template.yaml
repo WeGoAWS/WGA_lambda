@@ -36,6 +36,55 @@ Parameters:
     Type: String
     Default: wga-lambda-deployment
     Description: S3 bucket name for storing lambda deployment packages
+    
+  # 코드 키 매개변수를 추가하여 특정 버전의 코드 참조
+  AuthCodeKey:
+    Type: String
+    Default: wga-auth.zip
+    Description: S3 key for Auth Lambda function code
+    
+  CloudTrailCodeKey:
+    Type: String
+    Default: wga-cloudtrail.zip
+    Description: S3 key for CloudTrail Lambda function code
+    
+  PolicyRecommendationCodeKey:
+    Type: String
+    Default: wga-policy-recommendation.zip
+    Description: S3 key for Policy Recommendation Lambda function code
+  
+  # 강제 업데이트를 위한 타임스탬프 매개변수
+  DeploymentTimestamp:
+    Type: String
+    Default: '00000000000000'
+    Description: Timestamp for forced updates
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Environment Configuration"
+        Parameters:
+          - EnvironmentName
+          - DeploymentTimestamp
+      - Label:
+          default: "Cognito Configuration"
+        Parameters:
+          - CognitoDomain
+          - UserPoolId
+          - CognitoClientId
+          - CognitoIdentityPoolId
+      - Label:
+          default: "Storage Configuration"
+        Parameters:
+          - OutputBucketName
+          - DeploymentBucketName
+      - Label:
+          default: "Lambda Code Configuration"
+        Parameters:
+          - AuthCodeKey
+          - CloudTrailCodeKey
+          - PolicyRecommendationCodeKey
 
 Resources:
   # DynamoDB tables
@@ -188,9 +237,10 @@ Resources:
           COGNITO_DOMAIN: !Ref CognitoDomain
           COGNITO_IDENTITY_POOL_ID: !Ref CognitoIdentityPoolId
           OUTPUT_BUCKET: !Ref OutputBucketName
+          DEPLOYMENT_TIMESTAMP: !Ref DeploymentTimestamp
       Code:
         S3Bucket: !Ref DeploymentBucketName
-        S3Key: wga-auth.zip
+        S3Key: !Ref AuthCodeKey
 
   CloudTrailLambdaFunction:
     Type: AWS::Lambda::Function
@@ -211,9 +261,10 @@ Resources:
           COGNITO_DOMAIN: !Ref CognitoDomain
           COGNITO_IDENTITY_POOL_ID: !Ref CognitoIdentityPoolId
           OUTPUT_BUCKET: !Ref OutputBucketName
+          DEPLOYMENT_TIMESTAMP: !Ref DeploymentTimestamp
       Code:
         S3Bucket: !Ref DeploymentBucketName
-        S3Key: wga-cloudtrail.zip
+        S3Key: !Ref CloudTrailCodeKey
 
   PolicyRecommendationLambdaFunction:
     Type: AWS::Lambda::Function
@@ -235,9 +286,10 @@ Resources:
           COGNITO_DOMAIN: !Ref CognitoDomain
           COGNITO_IDENTITY_POOL_ID: !Ref CognitoIdentityPoolId
           OUTPUT_BUCKET: !Ref OutputBucketName
+          DEPLOYMENT_TIMESTAMP: !Ref DeploymentTimestamp
       Code:
         S3Bucket: !Ref DeploymentBucketName
-        S3Key: wga-policy-recommendation.zip
+        S3Key: !Ref PolicyRecommendationCodeKey
 
   # API Gateway
   WgaApi:
@@ -413,6 +465,8 @@ Resources:
     Properties:
       RestApiId: !Ref WgaApi
       StageName: !Ref EnvironmentName
+      # DeploymentTimestamp를 설명에 포함하여 매번 새로운 설명 생성
+      Description: !Sub 'Deployed at ${DeploymentTimestamp}'
 
   # Grant API Gateway permission to invoke Lambda functions
   AuthLambdaPermission:

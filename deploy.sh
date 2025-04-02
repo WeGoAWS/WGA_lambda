@@ -87,12 +87,37 @@ for func in auth cloudtrail policy-recommendation; do
     # 원래 디렉토리로 돌아가기
     cd - > /dev/null
     
-    # S3에 업로드
+    # S3에 업로드 (새 버전 생성을 위해 임의 날짜 추가)
     echo -e "${GREEN}S3에 업로드 중...${NC}"
-    aws s3 cp ${TEMP_DIR}/wga-${func}.zip s3://${S3_BUCKET}/ --region ${REGION}
+    TIMESTAMP=$(date +%Y%m%d%H%M%S)
+    aws s3 cp ${TEMP_DIR}/wga-${func}.zip s3://${S3_BUCKET}/wga-${func}-${TIMESTAMP}.zip --region ${REGION}
+    
+    # 새 파일명을 적용하도록 파라미터 파일 수정 (jq 사용)
+    if [ -x "$(command -v jq)" ] && [ -f "parameters-${ENV}.json" ]; then
+        # 파일명 매핑
+        if [ "$func" = "auth" ]; then
+            S3_KEY="wga-auth-${TIMESTAMP}.zip"
+            jq --arg key "$S3_KEY" 'map(if .ParameterKey == "AuthCodeKey" then .ParameterValue = $key else . end)' parameters-${ENV}.json > ${TEMP_DIR}/params-temp.json
+            mv ${TEMP_DIR}/params-temp.json parameters-${ENV}.json
+        elif [ "$func" = "cloudtrail" ]; then
+            S3_KEY="wga-cloudtrail-${TIMESTAMP}.zip"
+            jq --arg key "$S3_KEY" 'map(if .ParameterKey == "CloudTrailCodeKey" then .ParameterValue = $key else . end)' parameters-${ENV}.json > ${TEMP_DIR}/params-temp.json
+            mv ${TEMP_DIR}/params-temp.json parameters-${ENV}.json
+        elif [ "$func" = "policy-recommendation" ]; then
+            S3_KEY="wga-policy-recommendation-${TIMESTAMP}.zip"
+            jq --arg key "$S3_KEY" 'map(if .ParameterKey == "PolicyRecommendationCodeKey" then .ParameterValue = $key else . end)' parameters-${ENV}.json > ${TEMP_DIR}/params-temp.json
+            mv ${TEMP_DIR}/params-temp.json parameters-${ENV}.json
+        fi
+        echo -e "${GREEN}파라미터 파일에 코드 키 업데이트: ${S3_KEY}${NC}"
+    fi
     
     echo -e "${GREEN}함수 ${func} 배포 패키지 업로드 완료!${NC}"
 done
+
+# 기본 키를 사용하는 심볼릭 링크 생성
+aws s3 cp ${TEMP_DIR}/wga-auth.zip s3://${S3_BUCKET}/wga-auth.zip --region ${REGION}
+aws s3 cp ${TEMP_DIR}/wga-cloudtrail.zip s3://${S3_BUCKET}/wga-cloudtrail.zip --region ${REGION}
+aws s3 cp ${TEMP_DIR}/wga-policy-recommendation.zip s3://${S3_BUCKET}/wga-policy-recommendation.zip --region ${REGION}
 
 # CloudFormation 템플릿 업로드
 echo -e "${YELLOW}CloudFormation 템플릿 업로드 중...${NC}"
@@ -106,17 +131,25 @@ if [ -f "parameters-${ENV}.json" ]; then
     PARAMS_FILE="parameters-${ENV}.json"
     echo -e "${GREEN}파라미터 파일 사용: ${PARAMS_FILE}${NC}"
     
-    # 파라미터 파일에 DeploymentBucketName 추가
-    # jq가 설치되어 있지 않을 경우 수동으로 파라미터 추가
+    # jq가 설치되어 있는지 확인
     if [ -x "$(command -v jq)" ]; then
-        # jq를 사용하여 DeploymentBucketName 파라미터 추가
+        # 현재 타임스탬프 생성
+        TIMESTAMP=$(date +%Y%m%d%H%M%S)
+        echo -e "${GREEN}배포 타임스탬프: ${TIMESTAMP}${NC}"
+        
+        # 임시 파일 생성
         TMP_PARAMS=$(mktemp)
-        jq --arg bucket "$S3_BUCKET" '
+        
+        # DeploymentTimestamp 파라미터 업데이트 및 DeploymentBucketName 추가
+        jq --arg bucket "$S3_BUCKET" --arg ts "$TIMESTAMP" '
+            map(if .ParameterKey == "DeploymentTimestamp" then .ParameterValue = $ts else . end) |
             . += [{"ParameterKey": "DeploymentBucketName", "ParameterValue": $bucket}]
         ' ${PARAMS_FILE} > ${TMP_PARAMS}
+        
         PARAMS_FILE=${TMP_PARAMS}
+        echo -e "${GREEN}DeploymentTimestamp 파라미터가 ${TIMESTAMP}로 업데이트되었습니다.${NC}"
     else
-        echo -e "${YELLOW}jq가 설치되어 있지 않습니다. DeploymentBucketName 파라미터를 수동으로 추가해주세요.${NC}"
+        echo -e "${YELLOW}jq가 설치되어 있지 않습니다. DeploymentBucketName과 DeploymentTimestamp 파라미터를 수동으로 추가해주세요.${NC}"
     fi
     
     # 템플릿 유효성 검사
@@ -127,7 +160,7 @@ if [ -f "parameters-${ENV}.json" ]; then
         
     # 스택이 존재하는지 확인
     if aws cloudformation describe-stacks --stack-name wga-lambda-${ENV} --region ${REGION} &>/dev/null; then
-        # 스택 업데이트
+        # 스택 업데이트 및 완료 대기
         echo -e "${GREEN}기존 스택 업데이트 중...${NC}"
         aws cloudformation update-stack \
             --stack-name wga-lambda-${ENV} \
@@ -135,8 +168,20 @@ if [ -f "parameters-${ENV}.json" ]; then
             --parameters file://${PARAMS_FILE} \
             --capabilities CAPABILITY_NAMED_IAM \
             --region ${REGION}
+            
+        echo -e "${YELLOW}스택 업데이트 완료 대기 중...${NC}"
+        if aws cloudformation wait stack-update-complete --stack-name wga-lambda-${ENV} --region ${REGION}; then
+            echo -e "${GREEN}스택 업데이트 완료!${NC}"
+        else
+            echo -e "${RED}스택 업데이트 실패! 이벤트 로그를 확인합니다:${NC}"
+            aws cloudformation describe-stack-events \
+                --stack-name wga-lambda-${ENV} \
+                --region ${REGION} \
+                --query "StackEvents[?contains(ResourceStatus, 'FAILED')].{Resource:LogicalResourceId, Status:ResourceStatus, Reason:ResourceStatusReason}" \
+                --output table
+        fi
     else
-        # 스택 생성
+        # 스택 생성 및 완료 대기
         echo -e "${GREEN}새 스택 생성 중...${NC}"
         aws cloudformation create-stack \
             --stack-name wga-lambda-${ENV} \
@@ -144,36 +189,33 @@ if [ -f "parameters-${ENV}.json" ]; then
             --parameters file://${PARAMS_FILE} \
             --capabilities CAPABILITY_NAMED_IAM \
             --region ${REGION}
+            
+        echo -e "${YELLOW}스택 생성 완료 대기 중...${NC}"
+        if aws cloudformation wait stack-create-complete --stack-name wga-lambda-${ENV} --region ${REGION}; then
+            echo -e "${GREEN}스택 생성 완료!${NC}"
+        else
+            echo -e "${RED}스택 생성 실패! 이벤트 로그를 확인합니다:${NC}"
+            aws cloudformation describe-stack-events \
+                --stack-name wga-lambda-${ENV} \
+                --region ${REGION} \
+                --query "StackEvents[?contains(ResourceStatus, 'FAILED')].{Resource:LogicalResourceId, Status:ResourceStatus, Reason:ResourceStatusReason}" \
+                --output table
+        fi
+    fi
+
+    # 임시 디렉토리 제거
+    echo -e "${GREEN}임시 디렉토리 정리 중...${NC}"
+    rm -rf ${TEMP_DIR}  
+    
+    # 배포 완료 후 API 엔드포인트 정보 출력
+    echo -e "${YELLOW}스택 정보 조회 중...${NC}"
+    API_ENDPOINT=$(aws cloudformation describe-stacks --stack-name wga-lambda-${ENV} --region ${REGION} --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" --output text)
+
+    if [ "$API_ENDPOINT" = "None" ] || [ -z "$API_ENDPOINT" ]; then
+        echo -e "${YELLOW}API 엔드포인트를 찾을 수 없습니다. 다음 명령으로 모든 출력값을 확인하세요:${NC}"
+        echo -e "aws cloudformation describe-stacks --stack-name wga-lambda-${ENV} --region ${REGION} --query \"Stacks[0].Outputs\" --output json"
+    else
+        echo -e "${GREEN}배포 완료!${NC}"
+        echo -e "${GREEN}API 엔드포인트: ${API_ENDPOINT}${NC}"
     fi
 fi
-
-# 임시 디렉토리 제거
-echo -e "${GREEN}임시 디렉토리 정리 중...${NC}"
-rm -rf ${TEMP_DIR}
-
-# 스택 생성/업데이트 완료 대기
-echo -e "${YELLOW}스택 생성/업데이트 완료 대기 중...${NC}"
-if aws cloudformation wait stack-create-complete --stack-name wga-lambda-${ENV} --region ${REGION} 2>/dev/null; then
-    echo -e "${GREEN}스택 생성 완료!${NC}"
-elif aws cloudformation wait stack-update-complete --stack-name wga-lambda-${ENV} --region ${REGION} 2>/dev/null; then
-    echo -e "${GREEN}스택 업데이트 완료!${NC}"
-else
-    echo -e "${RED}스택 작업 실패 또는 다른 상태입니다. 수동으로 확인해 주세요.${NC}"
-    echo -e "${YELLOW}CloudFormation 이벤트 로그를 확인합니다:${NC}"
-    aws cloudformation describe-stack-events \
-        --stack-name wga-lambda-${ENV} \
-        --region ${REGION} \
-        --query "StackEvents[?contains(ResourceStatus, 'FAILED')].{Resource:LogicalResourceId, Status:ResourceStatus, Reason:ResourceStatusReason}" \
-        --output table
-fi
-
-# 배포 완료 후 API 엔드포인트 정보 출력
-echo -e "${YELLOW}스택 정보 조회 중...${NC}"
-API_ENDPOINT=$(aws cloudformation describe-stacks --stack-name wga-lambda-${ENV} --region ${REGION} --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" --output text)
-
-if [ "$API_ENDPOINT" = "None" ] || [ -z "$API_ENDPOINT" ]; then
-    echo -e "${YELLOW}API 엔드포인트를 찾을 수 없습니다. 다음 명령으로 모든 출력값을 확인하세요:${NC}"
-    echo -e "aws cloudformation describe-stacks --stack-name wga-lambda-${ENV} --region ${REGION} --query \"Stacks[0].Outputs\" --output json"
-else
-    echo -e "${GREEN}배포 완료!${NC}"
-    echo -e "${GREEN}API 엔드포
