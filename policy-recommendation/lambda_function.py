@@ -78,7 +78,9 @@ def get_id_token_from_session(event):
     요청의 세션 쿠키에서 ID 토큰을 추출합니다.
     """
     # 쿠키에서 세션 ID 추출
-    cookies = event.get('headers', {}).get('Cookie', '')
+    headers = event.get('headers', {})
+    cookies = headers.get('Cookie', '') or headers.get('cookie', '')
+    
     session_id = extract_session_id_from_cookies(cookies)
     
     if not session_id:
@@ -88,4 +90,6 @@ def get_id_token_from_session(event):
     session = get_session(session_id)
     
     # 세션에서 ID 토큰 반환
-    return session.get('id_token') if session else None
+    id_token = session.get('id_token') if session else None
+    
+    return id_token
