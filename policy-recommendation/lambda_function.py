@@ -6,7 +6,7 @@ import uuid
 from common.db import get_session
 from common.config import CONFIG
 from common.utils import extract_session_id_from_cookies, format_api_response, handle_api_exception, get_aws_session
-from recommendation_service import get_latest_analysis_from_s3, store_analysis_results, format_policy_recommendations, apply_policy_changes
+from recommendation_service import get_latest_analysis_from_s3, store_analysis_results, format_policy_recommendations, apply_policy_changes, process_analysis_results_workflow
 
 def lambda_handler(event, context):
     """
@@ -43,9 +43,13 @@ def process_multiple_analyses(event):
         session = get_aws_session(id_token)
         
         # recommendation_service의 래퍼 함수 활용
-        result = process_analysis_results_workflow(session)
+        full_result = process_analysis_results_workflow(session)
         
-        return format_api_response(200, result)
+        # results 부분만 클라이언트에 반환
+        if 'results' in full_result:
+            return format_api_response(200, full_result['results'])
+        else:
+            return format_api_response(200, [])  # results가 없는 경우 빈 배열 반환
     except Exception as e:
         return handle_api_exception(e)
 
