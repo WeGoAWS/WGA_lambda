@@ -68,10 +68,20 @@ def extract_session_id_from_cookies(cookies_string):
 def format_api_response(status_code, body, headers=None):
     """
     API Gateway Lambda Proxy 응답 형식으로 포맷합니다.
+    localhost는 제거예정입니다.
     """
+    default_headers = {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': 'http://localhost:5173',
+        'Access-Control-Allow-Credentials': 'true'
+    }
+    
+    if headers:
+        default_headers.update(headers)
+    
     response = {
         'statusCode': status_code,
-        'headers': headers or {'Content-Type': 'application/json'},
+        'headers': default_headers,
         'body': json.dumps(body) if isinstance(body, (dict, list)) else str(body)
     }
     return response

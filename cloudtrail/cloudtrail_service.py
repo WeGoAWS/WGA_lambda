@@ -280,3 +280,72 @@ def analyze_user_activity(session, user_arn, days=7):
     except Exception as e:
         print(f"Error analyzing user activity: {e}")
         raise
+
+# lambda_functions/cloudtrail/cloudtrail_service.py에 래퍼 함수 추가
+
+def get_cloudtrail_logs_summary(session, max_results=50):
+    """
+    CloudTrail 로그 이벤트를 조회하고 간략한 요약을 반환하는 래퍼 함수
+    
+    Args:
+        session (boto3.Session): AWS 세션
+        max_results (int): 최대 결과 개수
+        
+    Returns:
+        dict: 로그 이벤트 요약 정보
+    """
+    try:
+        # 기존 함수 활용
+        events = get_cloudtrail_events(session, max_results)
+        
+        # 이벤트 타입별 카운팅
+        event_types = {}
+        for event in events:
+            event_name = event.get('EventName', 'Unknown')
+            if event_name in event_types:
+                event_types[event_name] += 1
+            else:
+                event_types[event_name] = 1
+        
+        # 상위 이벤트 타입 계산
+        top_events = sorted(event_types.items(), key=lambda x: x[1], reverse=True)[:5]
+        
+        return {
+            'events': events,
+            'total_events': len(events),
+            'event_types_count': len(event_types),
+            'top_events': top_events
+        }
+    except Exception as e:
+        print(f"Error in get_cloudtrail_logs_summary: {e}")
+        raise
+
+def analyze_cloudtrail_with_context(session, id_token, user_context=None):
+    """
+    CloudTrail 로그 분석을 실행하고 컨텍스트 정보를 포함하는 래퍼 함수
+    
+    Args:
+        session (boto3.Session): AWS 세션
+        id_token (str): 사용자 ID 토큰
+        user_context (dict, optional): 추가 사용자 컨텍스트
+        
+    Returns:
+        dict: 분석 결과 및 컨텍스트 정보
+    """
+    # 기본 분석 실행
+    analysis_result = process_daily_logs(session, id_token)
+    
+    # 활성 CloudTrail 버킷 정보 추가
+    buckets = get_active_cloudtrail_s3_buckets(session)
+    
+    # 컨텍스트 정보 추가
+    result = {
+        **analysis_result,
+        'context': {
+            'active_cloudtrail_buckets': buckets,
+            'analysis_timestamp': analysis_result.get('analysis_timestamp', ''),
+            'user_context': user_context or {}
+        }
+    }
+    
+    return result

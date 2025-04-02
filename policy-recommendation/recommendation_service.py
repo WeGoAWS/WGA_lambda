@@ -554,3 +554,104 @@ def get_policy_summary(permissions_data):
             for service, actions_list in sorted(service_permissions.items())
         ]
     }
+
+# lambda_functions/policy_recommendation/recommendation_service.py에 래퍼 함수 추가
+
+def process_analysis_results_workflow(session):
+    """
+    분석 결과 처리 워크플로우를 실행하는 통합 래퍼 함수
+    
+    Args:
+        session (boto3.Session): AWS 세션
+        
+    Returns:
+        dict: 처리 결과 정보
+    """
+    try:
+        # S3에서 최신 분석 결과 가져오기
+        analysis_results = get_latest_analysis_from_s3(session)
+        
+        # 분석 결과가 없는 경우
+        if not analysis_results:
+            return {
+                'status': 'warning',
+                'message': '처리할 분석 결과가 없습니다.',
+                'results': []
+            }
+        
+        # DynamoDB에 결과 저장
+        stored_ids = store_analysis_results(analysis_results)
+        
+        # 프론트엔드용으로 결과 포맷팅
+        formatted_results = format_policy_recommendations(analysis_results)
+        
+        return {
+            'status': 'success',
+            'message': f'총 {len(analysis_results)}개의 분석 결과를 처리했습니다.',
+            'stored_records': len(stored_ids),
+            'results': formatted_results
+        }
+    except Exception as e:
+        print(f"Error in process_analysis_results_workflow: {e}")
+        raise
+
+def apply_policy_changes_with_validation(session, updates):
+    """
+    정책 변경 적용 전 유효성 검사를 수행하는 래퍼 함수
+    
+    Args:
+        session (boto3.Session): AWS 세션
+        updates (list): 적용할 정책 변경 목록
+        
+    Returns:
+        dict: 처리 결과 정보
+    """
+    # 기본 유효성 검사
+    if not updates or not isinstance(updates, list):
+        return {
+            'status': 'error',
+            'message': '유효한 업데이트 목록이 제공되지 않았습니다.',
+            'results': []
+        }
+    
+    # 각 업데이트 항목 유효성 검사
+    valid_updates = []
+    invalid_updates = []
+    
+    for update in updates:
+        if not isinstance(update, dict) or 'user_arn' not in update:
+            invalid_updates.append({
+                'update': update,
+                'reason': 'user_arn 필드가 없거나 형식이 잘못되었습니다.'
+            })
+            continue
+        
+        # IAM 사용자에 대한 변경인지 확인
+        user_arn = update.get('user_arn', '')
+        if ':user/' not in user_arn and ':assumed-role/' not in user_arn:
+            invalid_updates.append({
+                'update': update,
+                'reason': f'지원되지 않는 ARN 형식입니다: {user_arn}'
+            })
+            continue
+        
+        valid_updates.append(update)
+    
+    # 유효한 업데이트가 없는 경우
+    if not valid_updates:
+        return {
+            'status': 'error',
+            'message': '처리할 수 있는 유효한 업데이트가 없습니다.',
+            'invalid_updates': invalid_updates,
+            'results': []
+        }
+    
+    # 정책 변경 적용
+    results = apply_policy_changes(session, valid_updates)
+    
+    return {
+        'status': 'success',
+        'message': f'총 {len(valid_updates)}개의 정책 변경을 처리했습니다.',
+        'invalid_updates': invalid_updates if invalid_updates else None,
+        'results': results
+    }

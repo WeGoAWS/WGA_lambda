@@ -190,3 +190,60 @@ def refresh_tokens(refresh_token, provider):
     
     # 다른 제공자 구현 추가 가능
     return None
+    
+# lambda_functions/auth/auth_service.py에 추가할 래퍼 함수
+
+def get_session_info(session_id):
+    """
+    세션 ID로 세션 정보를 조회하는 래퍼 함수
+    
+    Args:
+        session_id (str): 세션 ID
+        
+    Returns:
+        dict: 세션 정보 또는 None
+    """
+    from common.db import get_session
+    return get_session(session_id)
+
+def validate_and_create_session(provider, id_token, access_token=None, refresh_token=None):
+    """
+    토큰 검증 및 세션 생성을 처리하는 통합 함수
+    
+    Args:
+        provider (str): 인증 제공자 (cognito, google, azure)
+        id_token (str): ID 토큰
+        access_token (str, optional): 액세스 토큰
+        refresh_token (str, optional): 리프레시 토큰
+        
+    Returns:
+        tuple: (success, session_id, claims, error_message)
+            - success (bool): 성공 여부
+            - session_id (str): 생성된 세션 ID 또는 None
+            - claims (dict): 토큰 클레임 정보 또는 None
+            - error_message (str): 오류 메시지 또는 None
+    """
+    from common.config import CONFIG
+    
+    # 토큰 검증
+    if provider == "cognito":
+        region = CONFIG['aws_region']
+        user_pool_id = CONFIG['cognito']['user_pool_id']
+        client_id = CONFIG['cognito']['client_id']
+        
+        is_valid, claims, error_msg = verify_cognito_token(
+            id_token, client_id, user_pool_id, region
+        )
+        
+        if not is_valid:
+            return False, None, None, error_msg
+        
+        # 세션 생성
+        session_id = create_user_session(
+            id_token, access_token, refresh_token, provider, claims
+        )
+        
+        return True, session_id, claims, None
+    
+    # 다른 제공자 지원 추가 가능
+    return False, None, None, "Unsupported provider"
