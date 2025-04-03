@@ -5,7 +5,7 @@ import time
 from common.db import get_session
 from common.config import CONFIG
 from common.utils import extract_session_id_from_cookies, format_api_response, handle_api_exception, get_aws_session
-from cloudtrail_service import get_cloudtrail_events, get_active_cloudtrail_s3_buckets, process_daily_logs, analyze_user_activity
+from cloudtrail_service import get_cloudtrail_events, get_active_cloudtrail_s3_buckets, process_daily_logs, analyze_user_activity, analyze_cloudtrail_with_context
 
 def lambda_handler(event, context):
     """
