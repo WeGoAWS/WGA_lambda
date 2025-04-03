@@ -96,6 +96,63 @@ def verify_token(event):
         if not success:
             return format_api_response(401, {"detail": error_msg})
         
+        # 제로 트러스트 컨텍스트 평가 추가
+        context = {
+            'source_ip': event.get('requestContext', {}).get('identity', {}).get('sourceIp', ''),
+            'user_agent': event.get('headers', {}).get('User-Agent', ''),
+            'timestamp': datetime.datetime.utcnow().isoformat(),
+            'mfa_used': body.get('mfa_used', False)
+        }
+        
+        # 제로 트러스트 평가 Lambda 호출
+        try:
+            lambda_client = session.client('lambda')
+            
+            payload = {
+                'body': json.dumps({
+                    'user_arn': claims.get('sub'),
+                    'action': 'sts:AssumeRole',  # 예시 액션
+                    'resource': '*',
+                    'context': context
+                })
+            }
+            
+            response = lambda_client.invoke(
+                FunctionName=f'wga-zero-trust-enforcer-{CONFIG["env"]}',
+                InvocationType='RequestResponse',
+                Payload=json.dumps(payload)
+            )
+            
+            # 응답 처리
+            if response.get('StatusCode') == 200:
+                zt_result = json.loads(response.get('Payload').read())
+                zt_body = json.loads(zt_result.get('body', '{}'))
+                
+                # 접근 거부 결정인 경우
+                if zt_body.get('decision') == 'deny':
+                    return format_api_response(403, {
+                        "detail": "Zero Trust policy denied access",
+                        "risk_score": zt_body.get('risk_score'),
+                        "factors": zt_body.get('factors')
+                    })
+                
+                # MFA 필요 결정인 경우
+                if zt_body.get('decision') == 'require_mfa' and not context.get('mfa_used'):
+                    return format_api_response(401, {
+                        "detail": "Additional authentication required",
+                        "require_mfa": True,
+                        "risk_score": zt_body.get('risk_score')
+                    })
+                
+                # 세션 만료 시간을 제로 트러스트 평가 결과에 따라 조정
+                if zt_body.get('expires_at'):
+                    expiration = zt_body.get('expires_at') - int(time.time())
+                else:
+                    expiration = claims.get("exp") - int(time.time())
+        except Exception as e:
+            print(f"Zero Trust evaluation error (proceeding with default policy): {e}")
+            expiration = claims.get("exp") - int(time.time())
+        
         # 세션 쿠키 설정
         return format_api_response(
             200, 

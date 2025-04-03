@@ -6,7 +6,7 @@ import boto3
 import uuid
 import re
 from common.config import CONFIG
-from common.db import create_analysis_result, get_user_analysis_results, get_latest_analysis_results
+from common.db import create_analysis_result, get_user_analysis_results, get_latest_analysis_results, get_user_activity_profile
 from common.utils import get_aws_session, download_from_s3, get_latest_s3_object
 
 def get_latest_analysis_from_s3(session):
@@ -152,6 +152,29 @@ def format_policy_recommendations(analysis_results):
         # 결과에 타입이 있으면 추가 (일일 요약 등)
         if "type" in result:
             formatted_result["type"] = result["type"]
+        
+        # 사용자 행동 프로파일 조회 추가
+        user_arn = result.get("user_arn") or result.get("user", "")
+        if user_arn:
+            profile = get_user_activity_profile(user_arn)
+            
+            # 프로파일이 있는 경우 추가 정보 통합
+            if profile:
+                # 추정된 필요 권한 추가
+                required_permissions = profile.get("required_permissions", [])
+                
+                # 현재 권한과 비교하여 더 최적화된 추천 생성
+                current_permissions = extract_current_permissions(result)
+                
+                excess_permissions = [p for p in current_permissions if p not in required_permissions]
+                missing_permissions = [p for p in required_permissions if p not in current_permissions]
+                
+                # 포맷된 결과에 반영
+                formatted_result["optimized_recommendations"] = {
+                    "excess_permissions": excess_permissions,
+                    "missing_permissions": missing_permissions,
+                    "required_permissions": required_permissions
+                }
         
         formatted_results.append(formatted_result)
     
@@ -363,6 +386,35 @@ def apply_policy_changes(session, updates):
                 "message": f"IAM 정책 업데이트 중 오류가 발생했습니다: {str(e)}",
                 "details": result
             })
+    
+    # 선택적으로 최적화된 역할 생성 호출
+    try:
+        # 역할 관리자 Lambda 호출
+        lambda_client = session.client('lambda')
+        
+        for update in updates:
+            if update.get("create_optimized_role", False):
+                user_arn = update.get("user_arn")
+                
+                if user_arn:
+                    # 최적화된 역할 생성 요청
+                    payload = {
+                        'user_arn': user_arn,
+                        'auto_assign': update.get("auto_assign", False)
+                    }
+                    
+                    response = lambda_client.invoke(
+                        FunctionName=f'wga-role-manager-{CONFIG["env"]}',
+                        InvocationType='RequestResponse',  # 동기 호출
+                        Payload=json.dumps(payload)
+                    )
+                    
+                    # 응답 처리
+                    if response.get('StatusCode') == 200:
+                        payload = json.loads(response.get('Payload').read())
+                        update['optimized_role'] = payload
+    except Exception as e:
+        print(f"Error creating optimized role: {e}")
     
     return overall_results
 

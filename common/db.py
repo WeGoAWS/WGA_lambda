@@ -16,6 +16,11 @@ dynamodb_client = boto3.client('dynamodb', region_name=CONFIG['aws_region'])
 sessions_table = dynamodb.Table(CONFIG['tables']['sessions'])
 users_table = dynamodb.Table(CONFIG['tables']['users'])
 analysis_results_table = dynamodb.Table(CONFIG['tables']['analysis_results'])
+user_behavior_profiles_table = dynamodb.Table(CONFIG['tables']['user_behavior_profiles'])
+role_templates_table = dynamodb.Table(CONFIG['tables']['role_templates'])
+role_history_table = dynamodb.Table(CONFIG['tables']['role_history'])
+anomaly_events_table = dynamodb.Table(CONFIG['tables']['anomaly_events'])
+access_decisions_table = dynamodb.Table(CONFIG['tables']['access_decisions'])
 
 # 테이블 정의 - 전역 변수로 선언
 TABLES_DEFINITION = [
@@ -77,8 +82,171 @@ TABLES_DEFINITION = [
             'ReadCapacityUnits': 5,
             'WriteCapacityUnits': 5
         }
+    },
+    {
+        'name': CONFIG['tables']['user_behavior_profiles'],
+        'key_schema': [
+            {'AttributeName': 'user_arn', 'KeyType': 'HASH'}
+        ],
+        'attribute_definitions': [
+            {'AttributeName': 'user_arn', 'AttributeType': 'S'},
+            {'AttributeName': 'risk_score', 'AttributeType': 'N'}
+        ],
+        'global_secondary_indexes': [
+            {
+                'IndexName': 'RiskScoreIndex',
+                'KeySchema': [
+                    {'AttributeName': 'risk_score', 'KeyType': 'HASH'}
+                ],
+                'Projection': {
+                    'ProjectionType': 'ALL'
+                },
+                'ProvisionedThroughput': {
+                    'ReadCapacityUnits': 5,
+                    'WriteCapacityUnits': 5
+                }
+            }
+        ],
+        'provisioned_throughput': {
+            'ReadCapacityUnits': 5,
+            'WriteCapacityUnits': 5
+        }
     }
 ]
+
+# 사용자 행동 프로파일 관련 함수
+def get_user_activity_profile(user_arn):
+    """
+    사용자 ARN으로 행동 프로파일을 조회합니다.
+    """
+    try:
+        response = user_behavior_profiles_table.get_item(Key={'user_arn': user_arn})
+        return response.get('Item')
+    except ClientError as e:
+        print(f"Error retrieving user profile: {e.response['Error']['Message']}")
+        return None
+
+def update_user_activity_profile(user_arn, profile_data):
+    """
+    사용자 행동 프로파일을 업데이트합니다.
+    """
+    try:
+        profile_data['user_arn'] = user_arn
+        user_behavior_profiles_table.put_item(Item=profile_data)
+        return True
+    except ClientError as e:
+        print(f"Error updating user profile: {e.response['Error']['Message']}")
+        return False
+
+# 역할 템플릿 관련 함수
+def get_role_template(template_id):
+    """
+    템플릿 ID로 역할 템플릿을 조회합니다.
+    """
+    try:
+        response = role_templates_table.get_item(Key={'id': template_id})
+        return response.get('Item')
+    except ClientError as e:
+        print(f"Error retrieving role template: {e.response['Error']['Message']}")
+        return None
+
+def get_templates_by_service(service_name):
+    """
+    특정 서비스와 관련된 역할 템플릿을 조회합니다.
+    """
+    try:
+        response = role_templates_table.query(
+            IndexName='ServiceIndex',
+            KeyConditionExpression=Key('target_services').contains(service_name)
+        )
+        return response.get('Items', [])
+    except ClientError as e:
+        print(f"Error querying templates by service: {e.response['Error']['Message']}")
+        return []
+
+# 역할 이력 관련 함수
+def save_role_history(history_data):
+    """
+    역할 변경 이력을 저장합니다.
+    """
+    try:
+        role_history_table.put_item(Item=history_data)
+        return history_data.get('id')
+    except ClientError as e:
+        print(f"Error saving role history: {e.response['Error']['Message']}")
+        return None
+
+def get_role_history_by_user(user_arn, limit=10):
+    """
+    사용자별 역할 변경 이력을 조회합니다.
+    """
+    try:
+        response = role_history_table.query(
+            IndexName='UserArnIndex',
+            KeyConditionExpression=Key('user_arn').eq(user_arn),
+            Limit=limit,
+            ScanIndexForward=False
+        )
+        return response.get('Items', [])
+    except ClientError as e:
+        print(f"Error retrieving role history: {e.response['Error']['Message']}")
+        return []
+
+# 이상 이벤트 관련 함수
+def save_anomaly_event(event_data):
+    """
+    이상 행동 이벤트를 저장합니다.
+    """
+    try:
+        anomaly_events_table.put_item(Item=event_data)
+        return event_data.get('id')
+    except ClientError as e:
+        print(f"Error saving anomaly event: {e.response['Error']['Message']}")
+        return None
+
+def get_anomaly_events_by_user(user_arn, limit=20):
+    """
+    사용자별 이상 행동 이벤트를 조회합니다.
+    """
+    try:
+        response = anomaly_events_table.query(
+            IndexName='UserArnIndex',
+            KeyConditionExpression=Key('user_arn').eq(user_arn),
+            Limit=limit,
+            ScanIndexForward=False
+        )
+        return response.get('Items', [])
+    except ClientError as e:
+        print(f"Error retrieving anomaly events: {e.response['Error']['Message']}")
+        return []
+
+# 접근 결정 관련 함수
+def save_access_decision(decision_data):
+    """
+    접근 결정 이력을 저장합니다.
+    """
+    try:
+        access_decisions_table.put_item(Item=decision_data)
+        return decision_data.get('request_id')
+    except ClientError as e:
+        print(f"Error saving access decision: {e.response['Error']['Message']}")
+        return None
+
+def get_access_decisions_by_user(user_arn, limit=20):
+    """
+    사용자별 접근 결정 이력을 조회합니다.
+    """
+    try:
+        response = access_decisions_table.query(
+            IndexName='UserArnIndex',
+            KeyConditionExpression=Key('user_arn').eq(user_arn),
+            Limit=limit,
+            ScanIndexForward=False
+        )
+        return response.get('Items', [])
+    except ClientError as e:
+        print(f"Error retrieving access decisions: {e.response['Error']['Message']}")
+        return []
 
 # 세션 관련 함수
 def get_session(session_id):

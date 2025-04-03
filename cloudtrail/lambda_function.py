@@ -5,7 +5,7 @@ import time
 from common.db import get_session
 from common.config import CONFIG
 from common.utils import extract_session_id_from_cookies, format_api_response, handle_api_exception, get_aws_session
-from cloudtrail_service import get_cloudtrail_events, get_active_cloudtrail_s3_buckets, process_daily_logs, analyze_user_activity, analyze_cloudtrail_with_context
+from cloudtrail_service import get_cloudtrail_events, get_active_cloudtrail_s3_buckets, process_daily_logs, analyze_user_activity, analyze_cloudtrail_with_context, invoke_behavior_analysis, invoke_anomaly_detection
 
 def lambda_handler(event, context):
     """
@@ -73,6 +73,12 @@ def analyze_cloudtrail_logs(event):
         
         # cloudtrail_service의 래퍼 함수 활용
         result = analyze_cloudtrail_with_context(session, id_token, user_context)
+
+        # 분석 완료 후 행동 분석 트리거
+        invoke_behavior_analysis(session, result)
+
+        # 이상 탐지 분석 트리거
+        invoke_anomaly_detection(session, result)
         
         return format_api_response(200, result)
     except Exception as e:
@@ -95,3 +101,4 @@ def get_id_token_from_session(event):
     
     # 세션에서 ID 토큰 반환
     return session.get('id_token') if session else None
+

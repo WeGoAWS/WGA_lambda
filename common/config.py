@@ -22,6 +22,24 @@ COGNITO_CLIENT_ID = os.environ.get('COGNITO_CLIENT_ID', '')
 COGNITO_DOMAIN = os.environ.get('COGNITO_DOMAIN', '')
 COGNITO_IDENTITY_POOL_ID = os.environ.get('COGNITO_IDENTITY_POOL_ID', '')
 
+# 추가 DynamoDB 테이블
+USER_BEHAVIOR_PROFILES_TABLE = os.environ.get('USER_BEHAVIOR_PROFILES_TABLE', f'UserBehaviorProfiles-{ENV}')
+ROLE_TEMPLATES_TABLE = os.environ.get('ROLE_TEMPLATES_TABLE', f'RoleTemplates-{ENV}')
+ROLE_HISTORY_TABLE = os.environ.get('ROLE_HISTORY_TABLE', f'RoleHistory-{ENV}')
+ANOMALY_EVENTS_TABLE = os.environ.get('ANOMALY_EVENTS_TABLE', f'AnomalyEvents-{ENV}')
+ACCESS_DECISIONS_TABLE = os.environ.get('ACCESS_DECISIONS_TABLE', f'AccessDecisions-{ENV}')
+
+# SNS 주제
+SNS_ALERT_TOPIC = os.environ.get('SNS_ALERT_TOPIC', f'wga-security-alerts-{ENV}')
+
+# 제로 트러스트 설정
+ZERO_TRUST_CONFIG = {
+    'session_duration': int(os.environ.get('SESSION_DURATION', '3600')),
+    'mfa_required_threshold': int(os.environ.get('MFA_REQUIRED_THRESHOLD', '50')),
+    'deny_threshold': int(os.environ.get('DENY_THRESHOLD', '70')),
+    'continuous_auth_interval': int(os.environ.get('CONTINUOUS_AUTH_INTERVAL', '900'))
+}
+
 # AWS SSM에서 비밀 설정 가져오기
 def get_ssm_parameter(param_name, with_decryption=True):
     """
@@ -47,6 +65,11 @@ def load_config():
             'sessions': SESSIONS_TABLE,
             'users': USERS_TABLE,
             'analysis_results': ANALYSIS_RESULTS_TABLE
+            'user_behavior_profiles': USER_BEHAVIOR_PROFILES_TABLE,
+            'role_templates': ROLE_TEMPLATES_TABLE,
+            'role_history': ROLE_HISTORY_TABLE,
+            'anomaly_events': ANOMALY_EVENTS_TABLE,
+            'access_decisions': ACCESS_DECISIONS_TABLE
         },
         's3': {
             'output_bucket': OUTPUT_BUCKET
@@ -56,7 +79,11 @@ def load_config():
             'client_id': COGNITO_CLIENT_ID,
             'domain': COGNITO_DOMAIN,
             'identity_pool_id': COGNITO_IDENTITY_POOL_ID
-        }
+        },
+        'sns': {
+            'anomaly_alert_topic': SNS_ALERT_TOPIC
+        },
+        'zero_trust': ZERO_TRUST_CONFIG        
     }
     
     # 개발 환경이 아니라면 SSM에서 추가 비밀 설정 로드

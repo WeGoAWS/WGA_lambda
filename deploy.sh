@@ -51,7 +51,7 @@ echo -e "${GREEN}공통 모듈 복사...${NC}"
 cp -r common/* ${TEMP_DIR}/common/
 
 # 함수별 배포 패키지 생성 및 업로드
-for func in auth cloudtrail policy-recommendation; do
+for func in auth cloudtrail policy-recommendation user_behavior_analytics role_manager zero_trust_enforcer anomaly_detector; do
     echo -e "${YELLOW}함수 ${func} 배포 패키지 생성 중...${NC}"
     
     # 함수별 디렉토리 생성

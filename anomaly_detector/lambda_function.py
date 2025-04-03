@@ -1,16 +1,17 @@
-# lambda_functions/policy_recommendation/lambda_function.py
+# 4. 이상 탐지 Lambda 함수 (anomaly_detector/lambda_function.py)
+
 import json
-import os
+import boto3
 import time
-import uuid
-from common.db import get_session
+import datetime
 from common.config import CONFIG
+from common.db import create_analysis_result
 from common.utils import extract_session_id_from_cookies, format_api_response, handle_api_exception, get_aws_session
-from recommendation_service import get_latest_analysis_from_s3, store_analysis_results, format_policy_recommendations, apply_policy_changes, process_analysis_results_workflow
+from detector_service import detect_account_anomalies, get_user_risk_score, save_anomaly_event
 
 def lambda_handler(event, context):
     """
-    Lambda 핸들러 함수
+    Lambda 핸들러 함수 - 이상 행동 탐지
     """
     print(f"Received event: {json.dumps(event)}")
     
@@ -20,18 +21,18 @@ def lambda_handler(event, context):
     
     # 엔드포인트 라우팅
     try:
-        if path == '/policy-recommendation/process-multiple-analyses' and http_method == 'GET':
-            return process_multiple_analyses(event)
-        elif path == '/policy-recommendation/apply-policy-changes' and http_method == 'POST':
-            return apply_policy_changes_handler(event)
+        if path == '/anomaly-detector/detect-account-anomalies' and http_method == 'GET':
+            return detect_account_anomalies_handler(event)
+        elif path == '/anomaly-detector/get-user-risk-score' and http_method == 'GET':
+            return get_user_risk_score_handler(event)
         else:
             return format_api_response(404, {'error': 'Not Found'})
     except Exception as e:
         return handle_api_exception(e)
 
-def process_multiple_analyses(event):
+def detect_account_anomalies_handler(event):
     """
-    여러 분석 결과를 한 번에 처리합니다.
+    AWS 계정 전체에 대한 이상 행동 탐지
     """
     try:
         # 세션에서 ID 토큰 가져오기
@@ -42,46 +43,41 @@ def process_multiple_analyses(event):
         # AWS 세션 생성
         session = get_aws_session(id_token)
         
-        # recommendation_service의 래퍼 함수 활용
-        full_result = process_analysis_results_workflow(session)
+        # 쿼리 파라미터에서 기간 추출
+        query_params = event.get('queryStringParameters', {}) or {}
+        days = int(query_params.get('days', 7))
         
-        # results 부분만 클라이언트에 반환
-        if 'results' in full_result:
-            return format_api_response(200, full_result['results'])
-        else:
-            return format_api_response(200, [])  # results가 없는 경우 빈 배열 반환
+        # 계정 전체 이상 탐지 실행
+        results = detect_account_anomalies(session, days)
+        
+        return format_api_response(200, results)
     except Exception as e:
         return handle_api_exception(e)
 
-def apply_policy_changes_handler(event):
+def get_user_risk_score_handler(event):
     """
-    사용자가 선택한 권한 변경 사항들을 실제 IAM 정책에 적용합니다.
+    특정 사용자의 위험 점수 계산
     """
     try:
+        # 쿼리 파라미터에서 사용자 ARN 추출
+        query_params = event.get('queryStringParameters', {}) or {}
+        user_arn = query_params.get('user_arn')
+        
+        if not user_arn:
+            return format_api_response(400, {"detail": "사용자 ARN이 필요합니다."})
+        
         # 세션에서 ID 토큰 가져오기
         id_token = get_id_token_from_session(event)
         if not id_token:
             return format_api_response(401, {"detail": "인증이 필요합니다."})
         
-        # 요청 바디 파싱
-        body = json.loads(event.get('body', '{}'))
-        updates = body
-
-        # 옵션에 따라 역할 최적화 추가
-        optimize_roles = query_params.get('optimize_roles', 'false').lower() == 'true'
-        
-        if optimize_roles:
-            # 각 업데이트에 최적화된 역할 생성 옵션 추가
-            for update in updates:
-                update['create_optimized_role'] = True
-        
         # AWS 세션 생성
         session = get_aws_session(id_token)
         
-        # recommendation_service의 래퍼 함수 활용
-        result = apply_policy_changes_with_validation(session, updates)
+        # 사용자 위험 점수 계산
+        risk_score = get_user_risk_score(session, user_arn)
         
-        return format_api_response(200, result)
+        return format_api_response(200, risk_score)
     except Exception as e:
         return handle_api_exception(e)
 
@@ -99,6 +95,7 @@ def get_id_token_from_session(event):
         return None
     
     # 세션 정보 조회
+    from common.db import get_session
     session = get_session(session_id)
     
     # 세션에서 ID 토큰 반환

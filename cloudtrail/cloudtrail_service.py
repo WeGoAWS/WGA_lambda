@@ -9,6 +9,7 @@ import uuid
 from io import BytesIO
 from common.config import CONFIG
 from common.utils import get_aws_session, upload_to_s3
+from common.db import save_anomaly_event
 
 def get_cloudtrail_events(session, max_results=50, start_time=None, end_time=None):
     """
@@ -185,6 +186,30 @@ def process_daily_logs(session, id_token):
                 "error": str(e)
             })
     
+    try:
+        # User Behavior Analytics Lambda 호출
+        lambda_client = session.client('lambda')
+        
+        # 분석할 사용자 ARN 목록
+        user_arns = extract_unique_users(all_logs)
+        
+        for user_arn in user_arns:
+            # 사용자별 행동 분석 실행
+            payload = {
+                'user_arn': user_arn,
+                'days': 1  # 최근 1일 분석
+            }
+            
+            lambda_client.invoke(
+                FunctionName=f'wga-user-behavior-analytics-{CONFIG["env"]}',
+                InvocationType='Event',  # 비동기 호출
+                Payload=json.dumps(payload)
+            )
+            
+            print(f"Triggered behavior analysis for user: {user_arn}")
+    except Exception as e:
+        print(f"Error triggering behavior analysis: {e}")
+    
     # 결과 저장
     if all_logs:
         # 간단한 분석 결과 준비 (실제 분석은 별도 서비스에서 수행)
@@ -349,3 +374,74 @@ def analyze_cloudtrail_with_context(session, id_token, user_context=None):
     }
     
     return result
+
+def extract_unique_users(logs):
+    """
+    CloudTrail 로그에서 고유한 사용자 ARN 목록을 추출합니다.
+    """
+    user_arns = set()
+    
+    for log in logs:
+        username = log.get('userIdentity', {}).get('arn')
+        if username and 'arn:aws:' in username:
+            user_arns.add(username)
+    
+    return list(user_arns)
+
+def invoke_behavior_analysis(session, analysis_result):
+    """
+    사용자 행동 분석 Lambda 비동기 호출
+    """
+    try:
+        lambda_client = session.client('lambda')
+        
+        # 분석할 사용자 ARN 목록
+        user_arns = set()
+        
+        # 결과에서 사용자 ARN 추출
+        for bucket in analysis_result.get('processed_buckets', []):
+            # CloudTrail 로그에서 사용자 ARN 추출 (세부 구현 필요)
+            user_arns.update(extract_users_from_bucket(session, bucket))
+        
+        for user_arn in user_arns:
+            # 사용자별 행동 분석 실행
+            payload = {
+                'queryStringParameters': {
+                    'user_arn': user_arn,
+                    'days': 7  # 최근 7일 분석
+                }
+            }
+            
+            lambda_client.invoke(
+                FunctionName=f'wga-user-behavior-analytics-{CONFIG["env"]}',
+                InvocationType='Event',  # 비동기 호출
+                Payload=json.dumps(payload)
+            )
+            
+            print(f"Triggered behavior analysis for user: {user_arn}")
+    except Exception as e:
+        print(f"Error triggering behavior analysis: {e}")
+
+def invoke_anomaly_detection(session, analysis_result):
+    """
+    이상 탐지 Lambda 비동기 호출
+    """
+    try:
+        lambda_client = session.client('lambda')
+        
+        # 계정 전체 이상 탐지 실행
+        payload = {
+            'queryStringParameters': {
+                'days': 1  # 최근 1일 분석
+            }
+        }
+        
+        lambda_client.invoke(
+            FunctionName=f'wga-anomaly-detector-{CONFIG["env"]}',
+            InvocationType='Event',  # 비동기 호출
+            Payload=json.dumps(payload)
+        )
+        
+        print(f"Triggered account-wide anomaly detection")
+    except Exception as e:
+        print(f"Error triggering anomaly detection: {e}")
